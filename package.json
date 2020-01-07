@@ -8,7 +8,8 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
+  "bin": {"discord-mango":  "out/client.js"},
   "dependencies": {
     "@types/node-fetch": "^2.5.4",
     "discord.js": "github:discordjs/discord.js",
