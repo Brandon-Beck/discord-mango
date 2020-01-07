@@ -68,3 +68,10 @@ interface RestoreYieldProgress {
   channel: Snowflake
 }
 type RestoreYield = RestoreYieldStart|RestoreYieldProgress|RestoreYieldEnd
+
+interface Settings {
+  ownerId: Snowflake
+  token: string
+  saveDir: string
+  prefix: string
+}

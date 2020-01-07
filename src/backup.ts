@@ -5,6 +5,7 @@
 import fetch from 'node-fetch'
 import fs from 'fs'
 import readline from 'readline'
+import Crypto from 'crypto'
 import {
   Channel
   ,Client

@@ -1,10 +1,11 @@
 import { Client ,MessageAdditions ,MessageAttachment ,MessageEmbed ,MessageOptions ,Snowflake } from 'discord.js'
 import fs from 'fs'
 import { restoreBackup ,startBackup } from './backup'
-import { BackupYieldType } from './types'
+import {BackupYieldType ,Settings} from './types'
+import {type} from "os"
 
 const client = new Client()
-const settings = JSON.parse(fs.readFileSync('./settings.json' ,'utf8'))
+const settings: Settings = JSON.parse(fs.readFileSync('./settings.json' ,'utf8'))
 
 client.on('ready' ,() => {
   console.log("I'm ready !")
@@ -25,6 +26,9 @@ client.on('message' ,async (message) => {
   // If the user that types a message is a bot account return.
   // If the command comes from DM return.
   if (!message.content.startsWith(settings.prefix) || message.author.bot || !message.guild) return
+
+  if (message.member.id !== settings.ownerId && message.member.hasPermission('ADMINISTRATOR')) return message.channel.send('Sorry, this bot is not currently available to the public...')
+  if (message.member.id !== settings.ownerId) return message.channel.send('I refuse to serve you!')
 
   if (command === 'backup') {
     // Check member permissions
@@ -62,14 +66,19 @@ client.on('message' ,async (message) => {
       const ats = entry.attachments.map((e) => new MessageAttachment(e.url ,e.name ,e))
       const embeds = entry.embeds.map((e) => new MessageEmbed(e))
       const opts: MessageAdditions = [...ats ,...embeds]
-      // await client.user.setUsername(entry.author.username)
-      // await client.user.setAvatar(entry.author.displayAvatarURL)
-      if (opts.length === 0) {
-        await message.channel.send(entry.content)
+      //await client.user.setUsername(entry.author.username)
+      //await client.user.setAvatar(entry.author.displayAvatarURL)
+      if (entry.type === "GUILD_MEMBER_JOIN") continue
+      try {
+        if (opts.length === 0) {
+          await message.channel.send(entry)
+        } else {
+          // client.user.setUsername(entry.author.username)
+          await message.channel.send(entry.content ,opts)
+        }
       }
-      else {
-        // client.user.setUsername(entry.author.username)
-        await message.channel.send(entry.content ,opts)
+      catch (e) {
+        throw new Error(JSON.stringify(entry,null,2))
       }
       await sleepFor(500)
     }
