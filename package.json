@@ -9,11 +9,14 @@
   "keywords": [],
   "author": "",
   "license": "MIT",
-  "bin": {"discord-mango":  "out/client.js"},
+  "bin": {
+    "discord-mango": "out/client.js"
+  },
   "dependencies": {
     "@types/node-fetch": "^2.5.4",
     "discord.js": "github:discordjs/discord.js",
     "fs": "0.0.1-security",
+    "fs-reverse": "0.0.3",
     "node-fetch": "^2.6.0"
   },
   "devDependencies": {

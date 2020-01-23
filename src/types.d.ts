@@ -46,9 +46,13 @@ interface BackupYieldStart extends BackupYieldBase{
 }
 interface BackupYieldEnd extends BackupYieldBase {
   type: BackupYieldType.Finished
+  newestMessageId?: Snowflake
+  oldestMessageId?: Snowflake
 }
 interface BackupYieldProgress extends BackupYieldBase {
   type: BackupYieldType.Progress
+  newestMessageId: Snowflake
+  oldestMessageId: Snowflake
 }
 type BackupYield = BackupYieldStart|BackupYieldProgress|BackupYieldEnd
 

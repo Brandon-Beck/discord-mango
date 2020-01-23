@@ -5,34 +5,39 @@
 import fetch from 'node-fetch'
 import fs from 'fs'
 import readline from 'readline'
-import Crypto from 'crypto'
+import fsr from 'fs-reverse'
 import {
-  Channel
-  ,Client
-  ,Collection
-  ,Message
-  ,MessageAttachment ,MessageEmbed
-  ,MessageReaction
-  ,MessageStore
-  ,ReactionUserStore
-  ,Snowflake
-  ,TextChannel
-  ,User
+  Channel ,
+  Collection ,
+  Message ,
+  MessageAttachment ,
+  MessageEmbed ,
+  MessageReaction ,
+  MessageStore ,
+  ReactionUserStore ,
+  Snowflake ,
+  TextChannel ,
+  User
 } from 'discord.js'
-import { BackupYield ,BackupYieldType ,DiscordBackupEntry ,RestoreYield } from './types'
+import {BackupYield ,BackupYieldType ,DiscordBackupEntry ,Settings} from './types'
 
-const settings = JSON.parse(fs.readFileSync('./settings.json' ,'utf8'))
+const settings: Settings = JSON.parse(fs.readFileSync('./settings.json' ,'utf8'))
+// msgStream-channelId-EverythingBeforeAndIncludingMsgId-EverythingAfterAndNotIncludingMsgId
 
 if (!fs.existsSync(settings.saveDir)) fs.mkdirSync(settings.saveDir)
 
-async function* messageIterator(messageStore: MessageStore ,startAt?: Snowflake): AsyncGenerator<Message> {
-  const messages = await messageStore.fetch({ before: startAt })
+// excludeMessagesOlderThanId?: number ,excludeMessagesNewerThanId?: number
+async function* messageIterator(messageStore: MessageStore ,afterMessageId?: Snowflake ,beforeMessageId?: Snowflake): AsyncGenerator<Message> {
+  const messages = await messageStore.fetch({
+    before: beforeMessageId
+    ,after: afterMessageId
+  })
   if (messages.size > 0) {
     for (const message of messages.values()) {
       yield message
     }
     // console.log(messages.lastKey())
-    yield* await messageIterator(messageStore ,messages.lastKey())
+    yield* await messageIterator(messageStore ,afterMessageId, messages.lastKey())
   }
 }
 async function* userIterator(userStore: ReactionUserStore ,startAt?: Snowflake): AsyncGenerator<User> {
@@ -66,6 +71,7 @@ async function* reactionIterator(reacts: Collection<Snowflake ,MessageReaction>)
     yield {
       ...react
       ,users
+      ,message: undefined
     }
   }
 }
@@ -117,7 +123,7 @@ function calcBackupPath(channelId: Snowflake ,timestamp: number) {
 }
 
 // FIXME: No yield
-export async function* startBackup(channel: Channel ,maxMsgs?: number): AsyncGenerator<BackupYield> {
+export async function* startBackup(channel: Channel ,afterMessageId?: Snowflake ,beforeMessageId?: Snowflake ,maxMsgs?: number): AsyncGenerator<BackupYield> {
   // Create the backup
   // for (const i of message.channel.fetchMessages()) c++
   if (channel.type !== 'text') {
@@ -141,10 +147,20 @@ export async function* startBackup(channel: Channel ,maxMsgs?: number): AsyncGen
   const backupTimeStamp = Date.now()
   const msgPath = calcBackupPath(channel.id ,backupTimeStamp)
   const msgStream = fs.createWriteStream(msgPath)
+  let firstMessageId
+  let lastMessageId
   yield {
-    type: BackupYieldType.Started ,path: msgPath ,channel: channel.id ,timestamp: backupTimeStamp
+    type: BackupYieldType.Started
+    ,path: msgPath
+    ,channel: channel.id
+    ,timestamp: backupTimeStamp
   }
-  for await (const message of messageIterator(messageStore)) {
+  for await (const message of messageIterator(messageStore ,afterMessageId, beforeMessageId )) {
+    if (maxMsgs && stats.messages.processed >= maxMsgs) {
+      break
+    }
+    if (firstMessageId === undefined) firstMessageId = message.id
+    lastMessageId=message.id
     const messageObj: DiscordBackupEntry = {
       ...message
       ,attachments: []
@@ -196,7 +212,12 @@ export async function* startBackup(channel: Channel ,maxMsgs?: number): AsyncGen
     stats.messages.processed++
   }
   yield {
-    type: BackupYieldType.Finished ,path: msgPath ,channel: channel.id ,timestamp: backupTimeStamp
+    type: BackupYieldType.Finished
+    ,path: msgPath
+    ,channel: channel.id
+    ,timestamp: backupTimeStamp
+    ,newestMessageId: firstMessageId
+    ,oldestMessageId: lastMessageId
   }
 
   console.log(JSON.stringify(stats ,null ,2))
@@ -213,4 +234,96 @@ export async function* restoreBackup(channelId: Snowflake ,backupTimestamp: numb
     const entry: DiscordBackupEntry = JSON.parse(line)
     yield entry
   }
+}
+/*
+export async function* restoreBackup(channelId: Snowflake ,backupTimestamp: number): AsyncGenerator<DiscordBackupEntry> {
+  const path = calcBackupPath(channelId ,backupTimestamp)
+  const fh = fsr(path ,{ encoding: 'utf8' })
+  while (true) {
+    yield new Promise((resolve,reject)=>{
+      fh.on('data' ,(data: string) => {
+        if (data.length > 0) {
+          const obj: DiscordBackupEntry = JSON.parse(data)
+          resolve(obj)
+        }
+      })
+    }) as Promise<DiscordBackupEntry>
+  }
+}
+ */
+
+export function isBackupOfChannel(path: string, channelId: Snowflake) {
+  const regex = new RegExp(`^${settings.saveDir}/msgStream-${channelId}-\\d+-\\d+.jsonstream$`)
+  if (path.match(regex)) return true
+  return false
+}
+export function parseMessageRange(path: string) {
+  const regex = new RegExp(`^${settings.saveDir}/msgStream-\\d+-(\\d+)-(\\d+).jsonstream$`)
+  const [,fromAndIncluding ,toAndExcluding] = path.match(regex)!
+  return [parseInt(fromAndIncluding) ,parseInt(toAndExcluding)]
+}
+export async function continueBackupOf(channel: Channel) {
+  const channelId = parseInt(channel.id)
+  const path = settings.saveDir
+  const missingRanges= []
+  let lastOldestMessageId
+  for await (const [newestMessageId,oldestMessageId] of fs.readdirSync(path)
+    .filter(path=>isBackupOfChannel(path,channelId))
+    .map(path=>parseMessageRange(path))
+    .sort(([fromA] ,[fromB]) => fromB - fromA)
+  ) {
+    if (lastOldestMessageId === undefined)
+      missingRanges.push([undefined ,newestMessageId])
+    else
+      missingRanges.push([lastOldestMessageId ,newestMessageId])
+    lastOldestMessageId = oldestMessageId
+  }
+  if (missingRanges.length === 0) missingRanges.push([])
+  for await (const [afterMessageId ,beforeMessageId] of missingRanges) {
+    for await (const info of startBackup(channel ,afterMessageId, beforeMessageId)) {
+      if (info.type === BackupYieldType.Finished && info.newestMessageId) {
+        // idk. do something
+      }
+    }
+  }
+}
+
+export async function aaa(channelId: Snowflake, backupTimestamp: number) {
+  const newestMessage = await getFirstMessageInBackup(channelId, backupTimestamp)
+  const oldestMessage = await getLastMessageInBackup(channelId, backupTimestamp)
+}
+
+export async function getLastMessageInBackup(channelId: Snowflake ,backupTimestamp: number): Promise<DiscordBackupEntry> {
+  const path = calcBackupPath(channelId ,backupTimestamp)
+  const fh = fsr(path ,{ encoding: 'utf8' })
+  return new Promise((resolve ,err) => {
+    fh.on('data' ,(data: string) => {
+      if (data.length > 0) {
+        const obj: DiscordBackupEntry = JSON.parse(data)
+        resolve(obj)
+        fh.destroy()
+      }
+    })
+    fh.on('close' ,() => {
+      err(new Error(`Couldn't Find any messages in <${path}>`))
+    })
+  })
+}
+
+export async function getFirstMessageInBackup(channelId: Snowflake ,backupTimestamp: number): Promise<DiscordBackupEntry> {
+  const path = calcBackupPath(channelId ,backupTimestamp)
+  const fh = fs.createReadStream(path ,{ encoding: 'utf8' })
+  const rl = readline.createInterface({ input: fh })
+  return new Promise((resolve ,err) => {
+    rl.on('data' ,(data: string) => {
+      if (data.length > 0) {
+        const obj: DiscordBackupEntry = JSON.parse(data)
+        resolve(obj)
+        fh.destroy()
+      }
+    })
+    fh.on('close' ,() => {
+      err(new Error(`Couldn't Find any messages in <${path}>`))
+    })
+  })
 }
